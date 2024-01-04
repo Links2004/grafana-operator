@@ -1,0 +1,49 @@
+name: test
+
+on:
+  push:
+    tags:
+      - t5.*
+
+permissions:
+  contents: write
+
+jobs:
+  kustomize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install flux
+        uses: fluxcd/flux2/action@v2.2.2
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create --draft --generate-notes "${{ github.ref_name }}"
+
+      - name: Prepare
+        run: |
+          # OCI standard enforces lower-case paths
+          KUSTOMIZE_REPO=$(echo "oci://ghcr.io/${{ github.repository_owner }}/kustomize/grafana-operator" | tr '[:upper:]' '[:lower:]')
+          GHCR_REPO=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "KUSTOMIZE_REPO=$KUSTOMIZE_REPO" >> $GITHUB_ENV
+          echo "GHCR_REPO=$GHCR_REPO" >> $GITHUB_ENV
+      - name: update-kustomize-image
+        run: |
+          # Install kustomize
+          make kustomize
+          # Update image to match the new image and tag
+          cd deploy/kustomize/base
+          kustomize edit set image ghcr.io/${{ github.repository }}=${{ env.GHCR_REPO }}:${{ github.ref_name }}
+      - name: update-kustomize-assert
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/kustomize-build
+          kustomize build deploy/kustomize/base > /tmp/kustomize-build/kustomize-base.yaml
+          for d in deploy/kustomize/overlays/*/ ; do
+               kustomize build "$d" > /tmp/kustomize-build/kustomize-$(basename "$d").yaml
+          done
+          gh release upload "${{ github.ref_name }}" /tmp/kustomize-build/kustomize-*.yaml
